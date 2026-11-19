@@ -66,8 +66,11 @@ const syncUpdateActionVisibility = ({
 
   elements.claudeInstallActions.hidden = !claudeActionVisible;
   elements.installUpdateClaudeButton.hidden = !claudeActionVisible;
-  elements.installUpdateClaudeButton.textContent =
-    actions.claudeCode === 'update' ? '一键更新' : '一键安装';
+  elements.installUpdateClaudeButton.textContent = state.claudeInstallPromise
+    ? '正在安装，请稍候…'
+    : actions.claudeCode === 'update'
+      ? '一键更新'
+      : '一键安装';
   dependencies.setRouterUpdateAction(
     routerActionVisible,
     actions.router === 'update' ? '一键更新' : '一键安装',
@@ -119,7 +122,10 @@ const updateCenterItems = (context: UpdatesViewContext): UpdateCenterItem[] => {
       actionLabel: '更新',
       category: 'tools',
       detail: state.softwareUpdates.claudeCode.message,
-      disabled: state.updateCenterOperationInProgress || state.softwareUpdateInProgress,
+      disabled:
+        state.updateCenterOperationInProgress ||
+        Boolean(state.claudeInstallPromise) ||
+        state.softwareUpdateInProgress,
       id: 'claude-code',
       run: dependencies.runClaudeInstallUpdate,
       title: 'Claude Code',
@@ -377,7 +383,7 @@ const renderSoftwareUpdates = (
       ? `可安装 v${target.latestVersion}`
       : '未安装';
   elements.claudeUpdateVersion.dataset.update = String(target.updateAvailable);
-  elements.installUpdateClaudeButton.disabled = state.softwareUpdateInProgress;
+  elements.installUpdateClaudeButton.disabled = Boolean(state.claudeInstallPromise);
   elements.softwareUpdateCheckedAt.textContent = `上次检查 ${new Date(
     softwareUpdates.checkedAt,
   ).toLocaleTimeString('zh-CN', {

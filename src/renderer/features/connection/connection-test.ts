@@ -40,6 +40,13 @@ export const createConnectionTestActions = (
     try {
       const input = configInput ?? dependencies.currentConfigInput('keep');
       if (
+        !configInput &&
+        saveOnSuccess &&
+        !(await dependencies.updates.ensureClaudeForConnection())
+      ) {
+        throw new Error('Claude Code 环境准备失败。请查看安装结果并重试，已填写的接入信息仍在。');
+      }
+      if (
         !activeStatus &&
         saveOnSuccess &&
         (input.autoDetect || (input.preset === 'anthropic' && input.authMode === 'existing'))

@@ -337,6 +337,7 @@ const { activateProject, addProject, chooseDirectory, failedWorkspaceResult } =
   createProjectOperations({
     describeWorkspace,
     homeDirectory: runtimeProfile.paths.home,
+    hasNextClaudeConnection: () => guards.requireClaudeRuntime().hasNextConversationConnection(),
     nextDevelopmentRuntime: () => agentRuntimeStore.getNext(),
     prepareCreatedConversation: (sessionId, projectPath, runtime) => {
       if (runtime === 'claude') {

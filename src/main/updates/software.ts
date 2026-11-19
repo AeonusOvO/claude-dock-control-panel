@@ -126,6 +126,7 @@ export const checkSoftwareUpdates = async (
     checkedAt: Date.now(),
     claudeCode: {
       currentVersion: installation.version,
+      readyForLaunch: installation.security === 'ready',
       installed: installation.installed,
       latestVersion: latestClaude,
       message: !installation.installed
@@ -173,6 +174,9 @@ export const installOrUpdateClaudeCode = async (
         '--id',
         'Anthropic.ClaudeCode',
         '--exact',
+        '--source',
+        'winget',
+        '--disable-interactivity',
         '--accept-package-agreements',
         '--accept-source-agreements',
       ],

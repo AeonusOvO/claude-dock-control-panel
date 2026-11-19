@@ -71,7 +71,13 @@ const installUtilityFeatures = (
   const pluginsFeature = features.pluginsFeature;
 
   registerUpdatesFeature(rendererRegistry, {
-    applyRouterRelevance: (updates) => features.connectionFeature.applyRouterRelevance(updates),
+    applyRouterRelevance: (updates) => {
+      features.connectionFeature.applyRouterRelevance(updates);
+      if (updates)
+        shells.connectionForm.setConnectionEnvironmentReady(
+          updates.claudeCode.readyForLaunch ?? updates.claudeCode.installed,
+        );
+    },
     downloadsIsOpen: downloadsFeature.isOpen,
     getActiveSessionId: () => activeStatus()?.id,
     getPluginCatalog: pluginsFeature.getCatalog,
@@ -501,6 +507,7 @@ const installManagementFeatures = (
     updates: {
       applyRouterRelevance: features.updatesFeature.applyRouterRelevance,
       loadSoftwareUpdates: features.updatesFeature.loadSoftwareUpdates,
+      ensureClaudeForConnection: features.updatesFeature.ensureClaudeForConnection,
       runClaudeInstallUpdate: features.updatesFeature.runClaudeInstallUpdate,
     },
   });

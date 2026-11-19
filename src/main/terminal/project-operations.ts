@@ -18,6 +18,7 @@ export interface ProjectOperationDependencies {
   describeWorkspace: DescribeWorkspace;
   /* Fallback for the folder dialog and the ceiling the picker will not walk above. */
   homeDirectory: string;
+  hasNextClaudeConnection: () => boolean;
   nextDevelopmentRuntime?: () => DevelopmentRuntime;
   prepareCreatedConversation?: (
     sessionId: string,
@@ -43,6 +44,7 @@ export const createProjectOperations = ({
   beforeActivate,
   describeWorkspace,
   homeDirectory,
+  hasNextClaudeConnection,
   nextDevelopmentRuntime = () => 'claude',
   prepareCreatedConversation = () => undefined,
   projectDirectoryLifecycle,
@@ -110,7 +112,17 @@ export const createProjectOperations = ({
       const resolved = resolveDirectory(directoryPath);
       return projectDirectoryLifecycle.runOpenSync(resolved, (ownership) => {
         ownership.assertCurrent();
-        const result = workspace.openProject(resolved, nextDevelopmentRuntime());
+        const runtime = nextDevelopmentRuntime();
+        if (
+          runtime === 'claude' &&
+          !workspace.sessionIdsForDirectory(resolved).length &&
+          !hasNextClaudeConnection()
+        ) {
+          workspaceStore.addProject(resolved);
+          workspace.emitState();
+          return { ok: true, needsClaudeConnection: true, state: describeWorkspace() };
+        }
+        const result = workspace.openProject(resolved, runtime);
 
         const createdSessionId = result.reused ? undefined : result.state.activeSessionId;
         if (createdSessionId) {

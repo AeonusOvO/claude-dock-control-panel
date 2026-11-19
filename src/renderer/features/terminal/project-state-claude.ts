@@ -241,7 +241,6 @@ export const createTerminalClaudeStateActions = (
     }
     const installationReady = installation.security === 'ready';
     connectionForm.setConnectionEnvironmentReady(installationReady);
-    connectionForm.environmentSetup.hidden = installationReady;
     claudeSecurityBanner.dataset.tone = installationReady
       ? 'ready'
       : installation.security === 'unknown'

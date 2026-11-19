@@ -385,7 +385,7 @@ export class TerminalWorkspace {
     return sessionId;
   }
 
-  private emitState(): void {
+  public emitState(): void {
     this.stateRevision += 1;
     this.onState(this.getState());
   }

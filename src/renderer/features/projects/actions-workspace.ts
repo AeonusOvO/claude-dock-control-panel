@@ -226,6 +226,10 @@ const handleAddedProjectResult = (
     return false;
   }
   const name = dependencies.projectNameFromPath(projectPath);
+  if (result.needsClaudeConnection) {
+    dependencies.showToast(`已添加 ${name}。请在“模型”页完成接入，然后从此项目新建对话。`);
+    return false;
+  }
   dependencies.showToast(result.reused ? `${name} 已经打开，已切换到该项目` : `已添加 ${name}`);
   return true;
 };

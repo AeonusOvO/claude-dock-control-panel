@@ -51,6 +51,8 @@ export interface WorkspaceState extends TerminalWorkspaceState {
 export interface WorkspaceResult extends FailureMetadata {
   /** Exact conversation created by this request; never inferred from the later active tab. */
   createdSessionId?: string;
+  /** Folder saved without launching a conversation until a Claude connection is configured. */
+  needsClaudeConnection?: boolean;
   error?: string;
   ok: boolean;
   reused?: boolean;

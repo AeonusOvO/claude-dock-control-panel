@@ -53,6 +53,59 @@ const marketplaceRefreshResult = {
 };
 
 describe('renderer updates feature', () => {
+  it('installs from the environment button without a project and preserves the draft on failure', async () => {
+    const missing = {
+      ...softwareUpdates,
+      claudeCode: { ...softwareUpdates.claudeCode, installed: false, readyForLaunch: false },
+    };
+    let finish!: (value: { message: string; ok: boolean; state: SoftwareUpdateState }) => void;
+    const install = vi.fn(
+      () =>
+        new Promise<{ message: string; ok: boolean; state: SoftwareUpdateState }>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const harness = await createRendererHarness({
+      getSoftwareUpdates: async () => missing,
+      installOrUpdateClaudeCode: install,
+      saveNextClaudeConfig: vi.fn(async () => ({ ok: true, state: {} })),
+    });
+    try {
+      await settle(harness);
+      harness.click('[data-rail-tab="connection"]');
+      harness.click('[data-provider-id="custom"]');
+      harness.click('#connection-wizard-next');
+      const url = harness.query<HTMLInputElement>('#claude-base-url');
+      const key = harness.query<HTMLInputElement>('#claude-credential');
+      expect(harness.query<HTMLFormElement>('#claude-config-form').inert).toBe(false);
+      expect(url.disabled || key.disabled).toBe(false);
+      url.value = 'https://api.example.test';
+      key.value = 'local-test-draft';
+      harness.click('#install-update-claude');
+      await harness.flush();
+      expect(install).toHaveBeenCalledOnce();
+      expect(harness.query('#install-update-claude').getAttribute('aria-busy')).toBe('true');
+      harness.query<HTMLFormElement>('#claude-config-form').requestSubmit();
+      await harness.flush();
+      expect(install).toHaveBeenCalledOnce();
+      finish({ ok: false, message: '安装源不可用', state: missing });
+      await settle(harness);
+      expect(harness.method('saveNextClaudeConfig')).not.toHaveBeenCalled();
+      expect(harness.query('#claude-update-detail').textContent).toContain('安装源不可用');
+      expect(key.value).toBe('local-test-draft');
+      expect(key.disabled).toBe(false);
+      harness.query<HTMLFormElement>('#claude-config-form').requestSubmit();
+      await harness.flush();
+      expect(install).toHaveBeenCalledTimes(2);
+      finish({ ok: true, message: '安装完成', state: softwareUpdates });
+      await settle(harness);
+      expect(harness.method('saveNextClaudeConfig')).toHaveBeenCalledOnce();
+      expect(harness.query('#environment-setup').hidden).toBe(true);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
   it('checks every update source and runs an application update from the center', async () => {
     let updaterState = applicationUpdater('available');
     const harness = await createRendererHarness({

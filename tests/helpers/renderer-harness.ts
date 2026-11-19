@@ -218,6 +218,17 @@ export const createRendererHarness = async (
             updatedAt: 1,
           },
         });
+      case 'getSoftwareUpdates':
+        return Promise.resolve({
+          checkedAt: 1,
+          claudeCode: {
+            installed: true,
+            readyForLaunch: true,
+            updateAvailable: false,
+            message: 'Claude Code 已就绪。',
+          },
+          router: { installed: true, updateAvailable: false, message: '' },
+        });
       case 'getWorkspace':
         return Promise.resolve(emptyWorkspace);
       case 'getOnboardingState':

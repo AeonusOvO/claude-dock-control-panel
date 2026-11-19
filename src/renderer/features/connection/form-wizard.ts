@@ -12,7 +12,6 @@ import {
   connectionWizardPreviousButton,
   connectionWizardStatus,
   connectionWizardViewport,
-  environmentSetup,
   providerSpecialSetup,
 } from './form-elements';
 import type { ConnectionFormDeps } from './form-dependencies';
@@ -180,13 +179,7 @@ export const createConnectionFormWizardActions = (
     connectionWizardChoiceProgress.disabled = !configure || (busy && !interruptible);
     connectionWizardConfigureProgress.disabled = true;
     connectionWizardPreviousButton.disabled = !configure || (busy && !interruptible);
-    connectionWizardNextButton.disabled =
-      busy ||
-      !formState.selectedProviderId ||
-      (configure &&
-        formState.selectedProviderId !== 'chatgpt-subscription' &&
-        !isSubscriptionProvider(formState.selectedProviderId) &&
-        !formState.connectionEnvironmentReady);
+    connectionWizardNextButton.disabled = busy || !formState.selectedProviderId;
 
     if (!configure) {
       const provider = findClaudeProvider(formState.selectedProviderId);
@@ -212,7 +205,7 @@ export const createConnectionFormWizardActions = (
       !isSubscriptionProvider(formState.selectedProviderId) &&
       !formState.connectionEnvironmentReady
     ) {
-      connectionWizardStatus.textContent = '请先完成 Claude Code 环境准备';
+      connectionWizardStatus.textContent = '可先填写接入信息，连接时会自动准备 Claude Code。';
     } else {
       const providerLabel =
         formState.selectedProviderId === 'chatgpt-subscription'
@@ -311,15 +304,6 @@ export const createConnectionFormWizardActions = (
     if (!formState.selectedProviderId || operationBusy()) return;
     if (formState.wizardStep === 'choice') {
       showStep('configure', true);
-      return;
-    }
-    if (
-      formState.selectedProviderId !== 'chatgpt-subscription' &&
-      !isSubscriptionProvider(formState.selectedProviderId) &&
-      !formState.connectionEnvironmentReady
-    ) {
-      environmentSetup.scrollIntoView({ behavior: userScrollBehavior(), block: 'center' });
-      deps.showToast('请先安装或更新 Claude Code。', 'error');
       return;
     }
     submitConfiguredConnection(deps, formState);

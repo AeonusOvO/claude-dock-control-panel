@@ -247,9 +247,35 @@ export abstract class ClaudeRuntimeRouting {
       fetchImpl: this.fetchImplementation,
       onProgress,
     });
+    if (!installation.installed) {
+      // The running Electron process predates PATH updates made by WinGet. Import only the
+      // directory of the installed executable, preserving the current process environment.
+      const { stdout } = await execFileAsync(
+        'powershell.exe',
+        [
+          '-NoLogo',
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          "$env:PATH += ';' + [Environment]::GetEnvironmentVariable('Path','User') + ';' + [Environment]::GetEnvironmentVariable('Path','Machine'); $cli = Get-Command claude.exe -CommandType Application -ErrorAction SilentlyContinue; if ($cli) { [Console]::OutputEncoding = [Text.Encoding]::UTF8; [Console]::Write($cli.Path) }",
+        ],
+        { encoding: 'utf8', windowsHide: true, timeout: 10000 },
+      );
+      const executable = stdout.trim();
+      if (path.isAbsolute(executable) && path.basename(executable).toLowerCase() === 'claude.exe') {
+        const directory = path.dirname(executable);
+        const entries = (process.env.PATH ?? '').split(path.delimiter);
+        if (!entries.some((entry) => entry.toLowerCase() === directory.toLowerCase())) {
+          process.env.PATH = [...entries, directory].join(path.delimiter);
+        }
+      }
+    }
     this.installationCache.clear();
     this.softwareUpdatesCache.clear();
-    return { message, state: await this.getSoftwareUpdates(true) };
+    const state = await this.getSoftwareUpdates(true);
+    if (!state.claudeCode.readyForLaunch)
+      throw new Error('安装命令已结束，但仍未检测到可启动的 Claude Code。请检查安装结果后重试。');
+    return { message, state };
   }
 
   public discoverProviderModels(

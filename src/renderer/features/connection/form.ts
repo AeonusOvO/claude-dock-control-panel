@@ -101,17 +101,21 @@ const subscribeChatGptProgress = (formState: ConnectionFormState, sync: () => vo
     sync();
   });
 
+const setEnvironmentReady = (formState: ConnectionFormState, ready: boolean): void => {
+  formState.connectionEnvironmentReady = ready;
+  environmentSetup.hidden =
+    ready ||
+    formState.selectedProviderId === 'chatgpt-subscription' ||
+    isSubscriptionProvider(formState.selectedProviderId);
+};
+
 const updateConnectionEnvironment = async (formState: ConnectionFormState): Promise<void> => {
   try {
-    const software = await window.controlPanel.getSoftwareUpdates();
-    formState.connectionEnvironmentReady = software.claudeCode.installed;
+    const { claudeCode } = await window.controlPanel.getSoftwareUpdates();
+    setEnvironmentReady(formState, claudeCode.readyForLaunch ?? claudeCode.installed);
   } catch {
-    formState.connectionEnvironmentReady = false;
+    setEnvironmentReady(formState, false);
   }
-  environmentSetup.hidden =
-    formState.selectedProviderId === 'chatgpt-subscription' ||
-    isSubscriptionProvider(formState.selectedProviderId) ||
-    formState.connectionEnvironmentReady;
 };
 
 export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm => {
@@ -298,7 +302,8 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
     },
     getConnectionEnvironmentReady: () => formState.connectionEnvironmentReady,
     setConnectionEnvironmentReady: (ready) => {
-      formState.connectionEnvironmentReady = ready;
+      setEnvironmentReady(formState, ready);
+      syncConnectionInteractivity();
     },
     getProviderGroupExpansionPending: () => providerGroupExpansionPending,
     setProviderGroupExpansionPending: (pending) => {

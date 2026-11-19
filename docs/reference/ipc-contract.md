@@ -113,6 +113,8 @@ BCP-47 语言后原子保存；它不接受任意环境变量名，也不修改 
 | `project:rename-conversation`      | `renameConversation`     |
 | `project:forget`                   | `forgetProject`          |
 
+`addProject` 在未配置 Claude 接入时也可成功保存文件夹。此时返回 `needsClaudeConnection: true`，`createdSessionId` 为空，工作区快照包含已记住的项目。
+
 ### `directory`（1）
 
 | 频道               | 方法              |

@@ -10,7 +10,7 @@ export interface SoftwareUpdateTarget {
 
 export interface SoftwareUpdateState {
   checkedAt: number;
-  claudeCode: SoftwareUpdateTarget;
+  claudeCode: SoftwareUpdateTarget & { readyForLaunch?: boolean };
   router: SoftwareUpdateTarget;
 }
 

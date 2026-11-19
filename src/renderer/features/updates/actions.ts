@@ -32,6 +32,7 @@ export interface UpdatesActions {
   refreshAvailableUpdates: (manual: boolean) => Promise<void>;
   runAllUpdates: () => Promise<void>;
   runApplicationUpdateAction: () => Promise<void>;
+  ensureClaudeForConnection: () => Promise<boolean>;
   runClaudeInstallUpdate: () => Promise<void>;
   runUpdateCenterAction: (item: UpdateCenterItem) => Promise<void>;
 }
@@ -63,8 +64,8 @@ const loadSoftwareUpdates = (context: UpdatesActionsContext, refresh = false): P
   if (state.softwareUpdatePromise) {
     return state.softwareUpdatePromise;
   }
-  if (state.softwareUpdateInProgress) {
-    return Promise.resolve();
+  if (state.claudeInstallPromise) {
+    return state.claudeInstallPromise.then(() => undefined);
   }
   state.softwareUpdateInProgress = true;
   state.softwareUpdatePromise = (async () => {
@@ -82,42 +83,49 @@ const loadSoftwareUpdates = (context: UpdatesActionsContext, refresh = false): P
     } finally {
       state.softwareUpdateInProgress = false;
       state.softwareUpdatePromise = undefined;
-      elements.installUpdateClaudeButton.disabled = false;
+      elements.installUpdateClaudeButton.disabled = Boolean(state.claudeInstallPromise);
       view.syncUpdateActionVisibility();
     }
   })();
   return state.softwareUpdatePromise;
 };
 
-const runClaudeInstallUpdate = async (context: UpdatesActionsContext): Promise<void> => {
+const installClaude = async (context: UpdatesActionsContext): Promise<boolean> => {
   const { dependencies, elements, state, view } = context;
-  if (state.softwareUpdateInProgress) {
-    return;
-  }
-  state.softwareUpdateInProgress = true;
   elements.installUpdateClaudeButton.disabled = true;
-  const original = elements.installUpdateClaudeButton.textContent;
+  elements.installUpdateClaudeButton.setAttribute('aria-busy', 'true');
   elements.installUpdateClaudeButton.textContent = '正在安装，请稍候…';
   try {
+    await state.softwareUpdatePromise;
     const result = await window.controlPanel.installOrUpdateClaudeCode();
     view.renderSoftwareUpdates(result.state);
-    dependencies.showToast(
-      result.ok ? result.message : dependencies.resultFailureMessage(result, result.message),
-      result.ok ? 'success' : 'error',
-    );
+    const ready = result.state.claudeCode.readyForLaunch ?? result.state.claudeCode.installed;
+    const ok = result.ok && ready;
+    const message = !result.ok
+      ? dependencies.resultFailureMessage(result, result.message)
+      : ready
+        ? result.message
+        : '安装命令已结束，仍未检测到可用的 Claude Code。请检查安装结果后重试。';
+    elements.claudeUpdateDetail.textContent = message;
+    dependencies.showToast(message, ok ? 'success' : 'error');
     const sessionId = dependencies.getActiveSessionId();
-    if (sessionId) {
-      void dependencies.loadClaudeState(sessionId);
-    }
-  } catch {
-    dependencies.showToast('Claude Code 安装或更新发生异常。', 'error');
+    if (sessionId) void dependencies.loadClaudeState(sessionId);
+    return ok;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Claude Code 安装或更新发生异常。';
+    elements.claudeUpdateDetail.textContent = message;
+    dependencies.showToast(message, 'error');
+    return false;
   } finally {
-    state.softwareUpdateInProgress = false;
-    elements.installUpdateClaudeButton.textContent = original;
+    state.claudeInstallPromise = undefined;
     elements.installUpdateClaudeButton.disabled = false;
+    elements.installUpdateClaudeButton.setAttribute('aria-busy', 'false');
     view.syncUpdateActionVisibility();
   }
 };
+
+const runClaudeInstallUpdate = (context: UpdatesActionsContext): Promise<boolean> =>
+  (context.state.claudeInstallPromise ??= installClaude(context));
 
 const runUpdateCenterAction = async (
   context: UpdatesActionsContext,
@@ -321,6 +329,9 @@ const bindUpdatesActions = (context: UpdatesActionsContext): (() => void) => {
       elements.refreshSoftwareUpdatesButton.disabled = false;
     });
   };
+  const handleClaudeInstall = (): void => {
+    void runClaudeInstallUpdate(context);
+  };
   const handleApplicationAction = (): void => void runApplicationUpdateAction(context);
 
   elements.refreshUpdatesButton.addEventListener('click', handleRefresh);
@@ -332,6 +343,7 @@ const bindUpdatesActions = (context: UpdatesActionsContext): (() => void) => {
   elements.updateCenterDialog.addEventListener('click', handleBackdrop);
   elements.updateCenterDialog.addEventListener('close', handleDialogClose);
   elements.refreshSoftwareUpdatesButton.addEventListener('click', handleSoftwareRefresh);
+  elements.installUpdateClaudeButton.addEventListener('click', handleClaudeInstall);
   elements.applicationUpdateAction.addEventListener('click', handleApplicationAction);
 
   return () => {
@@ -345,6 +357,7 @@ const bindUpdatesActions = (context: UpdatesActionsContext): (() => void) => {
     elements.updateCenterDialog.removeEventListener('click', handleBackdrop);
     elements.updateCenterDialog.removeEventListener('close', handleDialogClose);
     elements.refreshSoftwareUpdatesButton.removeEventListener('click', handleSoftwareRefresh);
+    elements.installUpdateClaudeButton.removeEventListener('click', handleClaudeInstall);
     elements.applicationUpdateAction.removeEventListener('click', handleApplicationAction);
   };
 };
@@ -362,7 +375,14 @@ export const createUpdatesActions = (
     refreshAvailableUpdates: (manual) => refreshAvailableUpdates(context, manual),
     runAllUpdates: () => runAllUpdates(context),
     runApplicationUpdateAction: () => runApplicationUpdateAction(context),
-    runClaudeInstallUpdate: () => runClaudeInstallUpdate(context),
+    ensureClaudeForConnection: async () => {
+      if (state.claudeInstallPromise) return state.claudeInstallPromise;
+      const { claudeCode } = await window.controlPanel.getSoftwareUpdates();
+      return (claudeCode.readyForLaunch ?? claudeCode.installed) || runClaudeInstallUpdate(context);
+    },
+    runClaudeInstallUpdate: async () => {
+      await runClaudeInstallUpdate(context);
+    },
     runUpdateCenterAction: (item) => runUpdateCenterAction(context, item),
   };
 };

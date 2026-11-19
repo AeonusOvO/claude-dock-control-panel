@@ -47,7 +47,6 @@ export const createConnectionFormSyncActions = (
     const usesExplicitCredential =
       claudeAuthMode.value === 'apiKey' || claudeAuthMode.value === 'authToken';
     claudeApiKeyHelperPolicy.disabled =
-      !formState.connectionEnvironmentReady ||
       connectionFeature.isTestInProgress() ||
       connectionFeature.isRemedyInProgress() ||
       !usesExplicitCredential;
@@ -81,7 +80,7 @@ export const createConnectionFormSyncActions = (
       formState.managedChatGptOperations.busy;
     providerPicker.setAttribute('aria-disabled', String(busy));
     providerPicker.inert = busy;
-    claudeConfigForm.inert = !formState.connectionEnvironmentReady || busy;
+    claudeConfigForm.inert = busy;
     connectionRemedyActions.inert = busy;
     for (const button of providerGroups.querySelectorAll<HTMLButtonElement>('.provider-card')) {
       button.disabled = busy;
@@ -89,12 +88,12 @@ export const createConnectionFormSyncActions = (
     for (const control of claudeConfigForm.querySelectorAll<
       HTMLButtonElement | HTMLInputElement | HTMLSelectElement
     >('button, input, select')) {
-      control.disabled = !formState.connectionEnvironmentReady || busy;
+      control.disabled = busy;
     }
     for (const button of connectionRemedyActions.querySelectorAll<HTMLButtonElement>('button')) {
       button.disabled = busy;
     }
-    if (formState.connectionEnvironmentReady && !busy) {
+    if (!busy) {
       const config = formState.nextConnection.config;
       clearCredentialButton.disabled = !(
         config?.sourceCredentialConfigured ?? config?.credentialConfigured

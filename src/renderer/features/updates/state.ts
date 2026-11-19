@@ -9,6 +9,7 @@ export type UpdateCenterTab = 'history' | 'pending';
 export interface UpdatesState {
   applicationUpdaterState?: ApplicationUpdaterState;
   downloadHistory: DownloadTaskView[];
+  claudeInstallPromise?: Promise<boolean>;
   softwareUpdateInProgress: boolean;
   softwareUpdatePromise?: Promise<void>;
   softwareUpdates?: SoftwareUpdateState;

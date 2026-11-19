@@ -103,6 +103,7 @@ export interface ConnectionActionsDependencies {
   updates: {
     applyRouterRelevance: () => void;
     loadSoftwareUpdates: (refresh?: boolean) => Promise<void>;
+    ensureClaudeForConnection: () => Promise<boolean>;
     runClaudeInstallUpdate: () => Promise<void>;
   };
 }

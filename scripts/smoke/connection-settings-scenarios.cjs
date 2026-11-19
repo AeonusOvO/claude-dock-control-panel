@@ -48,6 +48,18 @@ module.exports = async ({ capture, click, evaluate, waitFor }) => {
     'the prepared connection form',
   );
   await assertForm('#claude-config-form', 'simple');
+  await waitFor(
+    '() => !document.querySelector("#environment-setup").hidden && !document.querySelector("#install-update-claude").hidden',
+    'the missing Claude installation action',
+  );
+  await click('#claude-credential');
+  if (!(await evaluate('document.activeElement.id === "claude-credential"')))
+    throw new Error('Cannot focus API key on a clean installation.');
+  await click('#install-update-claude');
+  await waitFor(
+    '() => document.querySelector("#claude-update-detail").textContent.includes("隔离运行配置禁止")',
+    'the install action reaching the isolated main-process guard',
+  );
   if (!(await evaluate('document.querySelector("#base-url-field").hidden')))
     throw new Error('Domestic URL should be hidden.');
   await capture(

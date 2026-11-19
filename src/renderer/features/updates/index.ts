@@ -24,6 +24,7 @@ export interface UpdatesFeature {
   dispose: () => void;
   loadSoftwareUpdates: (refresh?: boolean) => Promise<void>;
   refreshAvailableUpdates: (manual: boolean) => Promise<void>;
+  ensureClaudeForConnection: () => Promise<boolean>;
   runClaudeInstallUpdate: () => Promise<void>;
   syncUpdateActionVisibility: () => void;
 }
@@ -62,6 +63,7 @@ const createUpdatesFeature = (dependencies: UpdatesFeatureDependencies): Updates
   return {
     applyRouterRelevance: view.applyRouterRelevance,
     dispose,
+    ensureClaudeForConnection: actions.ensureClaudeForConnection,
     loadSoftwareUpdates: actions.loadSoftwareUpdates,
     refreshAvailableUpdates: actions.refreshAvailableUpdates,
     runClaudeInstallUpdate: actions.runClaudeInstallUpdate,

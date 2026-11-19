@@ -33,11 +33,8 @@ for (const directory of [
 ]) {
   mkdirSync(directory, { recursive: true });
 }
-// Supply only the installation probe required by the form. Every other CLI invocation fails.
-writeFileSync(
-  path.join(fixtureBin, 'claude.cmd'),
-  '@echo off\r\nif not "%~1"=="--version" exit /b 1\r\necho 2.1.197 (Claude Code)\r\n',
-);
+// Simulate a machine without a usable CLI even when the workstation already has Claude installed.
+writeFileSync(path.join(fixtureBin, 'claude.cmd'), '@echo off\r\nexit /b 1\r\n');
 const pathVariable = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
 // A prepared, credential-free connection in this fixture's private profile. Keep the isolated
 // runtime's external-write/network/real-CLI guards intact; no host account or routing file is used.
