@@ -60,6 +60,7 @@ export const registerClaudeLaunchDecisionIpc = (
     failedRuntimeLaunchCleanupDependencies,
     guards: {
       assertLaunchAdmissionAllowed,
+      assertRealRuntimeAllowed,
       requireClaudeRuntime,
       requireProviderAccessGuard,
       validateSender,
@@ -84,7 +85,10 @@ export const registerClaudeLaunchDecisionIpc = (
     async (event, input: unknown): Promise<ClaudeLaunchPreflightDecisionOutcome> => {
       validateSender(event);
       const { choice, decisionId } = validateClaudeLaunchPreflightDecisionInput(input);
-      if (choice !== 'cancel') assertLaunchAdmissionAllowed();
+      if (choice !== 'cancel') {
+        assertLaunchAdmissionAllowed();
+        assertRealRuntimeAllowed();
+      }
       const reserved = launchPreflightDecisions.reserve(decisionId, choice);
       if (reserved.status !== 'reserved') return { status: reserved.status };
       const reservation = reserved.reservation;

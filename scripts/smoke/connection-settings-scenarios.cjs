@@ -19,8 +19,8 @@ module.exports = async ({ capture, click, evaluate, waitFor }) => {
 
   await click('[data-rail-tab="connection"]');
   await waitFor(
-    '() => Boolean(document.querySelector("[data-access-choice=domestic]"))',
-    'the provider picker',
+    '() => { const card = document.querySelector("[data-access-choice=domestic]"); return card && !card.disabled && !card.closest("[inert]"); }',
+    'the enabled provider picker after connection status refresh',
   );
   const overview = await evaluate(`(() => {
     const overview = document.querySelector('.connection-overview');

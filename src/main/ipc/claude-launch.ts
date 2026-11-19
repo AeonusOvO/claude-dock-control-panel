@@ -474,6 +474,7 @@ const registerClaudeRelaunchIpc = ({
   failedRuntimeLaunchCleanupDependencies,
   guards: {
     assertLaunchAdmissionAllowed,
+    assertRealRuntimeAllowed,
     requireClaudeRuntime,
     validateSender,
     withOfficialProviderAccess,
@@ -489,6 +490,7 @@ const registerClaudeRelaunchIpc = ({
     async (event, sessionId: unknown, input: unknown): Promise<ClaudeLaunchOutcome> => {
       validateSender(event);
       assertLaunchAdmissionAllowed();
+      assertRealRuntimeAllowed();
       const validatedSessionId = validateSessionId(sessionId);
       const validatedInput = validateClaudeRelaunchInput(input);
       const status = workspace.getStatus(validatedSessionId);
@@ -638,6 +640,7 @@ const registerClaudeStartIpc = ({
   failedRuntimeLaunchCleanupDependencies,
   guards: {
     assertLaunchAdmissionAllowed,
+    assertRealRuntimeAllowed,
     requireClaudeRuntime,
     validateSender,
     withOfficialProviderAccess,
@@ -652,6 +655,7 @@ const registerClaudeStartIpc = ({
     async (event, sessionId: unknown, mode: unknown): Promise<ClaudeLaunchOutcome> => {
       validateSender(event);
       assertLaunchAdmissionAllowed();
+      assertRealRuntimeAllowed();
       const validatedSessionId = validateSessionId(sessionId);
       const launchMode = validateClaudeLaunchMode(mode);
       const status = workspace.getStatus(validatedSessionId);
@@ -816,6 +820,7 @@ const registerClaudeSessionLaunchIpc = ({
   failedRuntimeLaunchCleanupDependencies,
   guards: {
     assertLaunchAdmissionAllowed,
+    assertRealRuntimeAllowed,
     requireClaudeRuntime,
     validateSender,
     withOfficialProviderAccess,
@@ -831,6 +836,7 @@ const registerClaudeSessionLaunchIpc = ({
     async (event, sessionId: unknown, conversationId: unknown): Promise<ClaudeLaunchOutcome> => {
       validateSender(event);
       assertLaunchAdmissionAllowed();
+      assertRealRuntimeAllowed();
       const validatedSessionId = validateSessionId(sessionId);
       if (typeof conversationId !== 'string' || !isValidClaudeSessionId(conversationId)) {
         return {

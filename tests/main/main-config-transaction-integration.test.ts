@@ -84,6 +84,7 @@ const registerClaudeRelaunchHarness = async (input: {
       stopIfGeneration: vi.fn(),
     },
     guards: {
+      assertRealRuntimeAllowed: vi.fn(),
       assertLaunchAdmissionAllowed: vi.fn(),
       requireClaudeRuntime: vi.fn(() => runtime),
       validateSender: vi.fn(),
@@ -531,6 +532,7 @@ describe('main project-config transaction integration', () => {
       getStatus: vi.fn(() => ({ cwd: 'D:\\Project', id: 'session-1', ptyGeneration: 3 })),
     };
     const guards = {
+      assertRealRuntimeAllowed: vi.fn(),
       assertLaunchAdmissionAllowed: vi.fn(),
       withOfficialProviderAccess: vi.fn(async (_request, operation) => operation()),
       requireCcSwitchAdapter: vi.fn(() => ({})),

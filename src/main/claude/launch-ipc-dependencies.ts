@@ -29,6 +29,7 @@ export interface ClaudeLaunchIpcDependencies {
   guards: Pick<
     MainGuards,
     | 'assertLaunchAdmissionAllowed'
+    | 'assertRealRuntimeAllowed'
     | 'withOfficialProviderAccess'
     | 'requireClaudeRuntime'
     | 'requireProviderAccessGuard'

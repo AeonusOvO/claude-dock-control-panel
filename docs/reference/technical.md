@@ -267,7 +267,7 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   `ManagedChatGptGateway.ensureRunning()`。这只恢复 ClaudeDock 自有的回环 sidecar，不接管外部
   Claude/Codex/CCR；成功后才运行真实一 token 测试并替换旧健康快照。
 - 隔离 profile 使用临时 userData/home/project、假适配器和内存终端，不获取生产单实例锁，不启动
-  托盘、更新器、插件变更、外部路由写入或真实 PTY。所有危险入口在主进程再次检查 profile capability。
+  托盘、更新器、插件变更、外部路由写入或真实 PTY。主进程在 Claude 启动、恢复、重启与继续预检的入口先检查 profile capability，再进行网络预检或操作终端。
 - Claude Agent SDK 解析器先查找用户可执行的 `claude` 命令。直接安装返回 `claude.exe` 时原样使用；
   NPM 的 `claude.cmd` / `claude.ps1` 启动器则只解包到同一安装目录下
   `node_modules/@anthropic-ai/claude-code/bin/claude.exe`，并在文件不存在时给出可执行的重装诊断。

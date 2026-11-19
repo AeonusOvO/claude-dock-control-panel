@@ -367,6 +367,7 @@ const registerLaunchPreflightHarness = async () => {
   const stopIfGeneration = vi.fn();
   const validateSender = vi.fn();
   const launchAdmission = { allowed: true };
+  const assertRealRuntimeAllowed = vi.fn();
   const assertLaunchAdmissionAllowed = vi.fn(() => {
     if (!launchAdmission.allowed) throw new Error('应用正在退出，无法启动新的 Claude 会话。');
   });
@@ -385,6 +386,7 @@ const registerLaunchPreflightHarness = async () => {
       stopIfGeneration,
     },
     guards: {
+      assertRealRuntimeAllowed,
       assertLaunchAdmissionAllowed,
       requireClaudeRuntime: vi.fn(() => runtime),
       requireProviderAccessGuard: vi.fn(() => providerAccess),
@@ -412,6 +414,7 @@ const registerLaunchPreflightHarness = async () => {
     } as never,
   });
   return {
+    assertRealRuntimeAllowed,
     assertLaunchAdmissionAllowed,
     blockedError,
     blockedResult,
@@ -440,6 +443,17 @@ afterEach(() => {
 });
 
 describe('main-process session operation ownership', () => {
+  it('rejects an isolated CLI launch before starting provider preflight', async () => {
+    const harness = await registerLaunchPreflightHarness();
+    harness.assertRealRuntimeAllowed.mockImplementation(() => {
+      throw new Error('isolated');
+    });
+    await expect(harness.ipc.invoke(CHANNELS.CLAUDE_LAUNCH, 'session-1', 'new')).rejects.toThrow(
+      'isolated',
+    );
+    expect(harness.withOfficialProviderAccess).not.toHaveBeenCalled();
+    expect(harness.runtime.prepareLaunch).not.toHaveBeenCalled();
+  });
   it('gives launch decisions exact pending, deciding, consumed, replacement, and superseded semantics', () => {
     let nextId = 0;
     const coordinator = new LaunchPreflightDecisionCoordinator({
@@ -1964,6 +1978,7 @@ describe('main-process session operation ownership', () => {
         stopIfGeneration,
       },
       guards: {
+        assertRealRuntimeAllowed: vi.fn(),
         assertLaunchAdmissionAllowed: vi.fn(),
         requireClaudeRuntime: vi.fn(() => runtime),
         validateSender: vi.fn(),

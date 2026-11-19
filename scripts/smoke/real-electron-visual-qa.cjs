@@ -16,6 +16,7 @@ const userData = path.join(isolatedRoot, 'userData');
 const appPreferences = path.join(userData, 'app-preferences');
 const claudePreferences = path.join(userData, 'claude');
 const fakeHome = path.join(isolatedRoot, 'home');
+const fixtureBin = path.join(fakeHome, 'bin');
 const projects = path.join(isolatedRoot, 'projects');
 const projectPath = path.join(projects, 'native-conversation-visual-project');
 const electronPath = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe');
@@ -26,11 +27,18 @@ for (const directory of [
   appPreferences,
   claudePreferences,
   fakeHome,
+  fixtureBin,
   projects,
   projectPath,
 ]) {
   mkdirSync(directory, { recursive: true });
 }
+// Supply only the installation probe required by the form. Every other CLI invocation fails.
+writeFileSync(
+  path.join(fixtureBin, 'claude.cmd'),
+  '@echo off\r\nif not "%~1"=="--version" exit /b 1\r\necho 2.1.197 (Claude Code)\r\n',
+);
+const pathVariable = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
 // A prepared, credential-free connection in this fixture's private profile. Keep the isolated
 // runtime's external-write/network/real-CLI guards intact; no host account or routing file is used.
 writeFileSync(
@@ -165,7 +173,11 @@ const main = async () => {
     {
       cwd: root,
       detached: false,
-      env: { ...process.env, ELECTRON_ENABLE_LOGGING: '0' },
+      env: {
+        ...process.env,
+        [pathVariable]: [fixtureBin, process.env[pathVariable]].join(path.delimiter),
+        ELECTRON_ENABLE_LOGGING: '0',
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: false,
     },
@@ -219,6 +231,10 @@ const main = async () => {
         const queued = document.querySelector('#native-queued');
         const input = document.querySelector('#native-composer-input');
         return {
+          connectionProvider: document.querySelector('[data-access-choice][aria-pressed="true"]')?.dataset.providerId,
+          connectionStep: document.querySelector('.connection-wizard-step--active')?.id,
+          connectionStatus: document.querySelector('#connection-wizard-status')?.textContent,
+          connectionNext: document.querySelector('#connection-wizard-next')?.textContent,
           blocker: dialog
             ? (dialog.id || dialog.className || 'dialog') + ': ' +
               (dialog.querySelector('h1, h2, h3, .dialog__title')?.textContent ?? '').trim()
