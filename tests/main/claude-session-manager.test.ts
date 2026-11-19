@@ -36,6 +36,7 @@ const writeSession = (
     sessionFile,
     [
       JSON.stringify({
+        cwd,
         sessionId,
         slug: 'useful-session',
         timestamp,
@@ -84,6 +85,45 @@ describe('ClaudeSessionManager', () => {
       sessionId: newerId,
       sessionName: 'useful-session',
     });
+  });
+
+  it('checks transcript ownership before listing, renaming or deleting in a shared directory', async () => {
+    const flat = 'D:\\team-app';
+    const nested = 'D:\\team\\app';
+    const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const other = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const file = writeSession(flat, id, '2026-07-20');
+    writeSession(nested, other, '2026-07-20');
+    const manager = new ClaudeSessionManager(projectsRoot);
+    const before = readFileSync(file, 'utf8');
+    expect(manager.getSessionsForProject(flat).map((row) => row.conversationId)).toEqual([id]);
+    expect(
+      (await manager.getSessionsForProjectAsync(nested)).map((row) => row.conversationId),
+    ).toEqual([other]);
+    expect(manager.renameSession(nested, id, 'wrong')).toBe(false);
+    expect(manager.deleteSession(nested, id)).toBe(false);
+    expect(readFileSync(file, 'utf8')).toBe(before);
+    expect(manager.renameSession(flat, id, 'right')).toBe(true);
+  });
+
+  it('uses per-session legacy index ownership for rows without cwd', async () => {
+    const cwd = 'D:\\legacy-app',
+      other = 'D:\\legacy\\app';
+    const id = 'abababab-abab-4bab-8bab-abababababab';
+    const file = writeSession(cwd, id, '2026-07-20');
+    writeFileSync(file, JSON.stringify({ type: 'user', sessionId: id }) + '\n');
+    const manager = new ClaudeSessionManager(projectsRoot);
+    expect(manager.renameSession(other, id, 'wrong')).toBe(false);
+    expect(manager.deleteSession(other, id)).toBe(false);
+    writeFileSync(
+      path.join(path.dirname(file), 'sessions-index.json'),
+      JSON.stringify({ entries: [{ sessionId: id, projectPath: cwd }] }),
+    );
+    expect(
+      (await manager.getSessionsForProjectAsync(cwd)).map((row) => row.conversationId),
+    ).toEqual([id]);
+    expect(manager.getSessionsForProject(other)).toEqual([]);
+    expect(manager.deleteSession(cwd, id)).toBe(true);
   });
 
   it('deletes only the validated session in the requested project', () => {

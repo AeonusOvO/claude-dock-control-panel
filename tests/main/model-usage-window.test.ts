@@ -110,6 +110,23 @@ afterEach(() => {
 });
 
 describe('model usage window lifecycle', () => {
+  it('coalesces two shows during loading and publishes visibility once', async () => {
+    process.env.ELECTRON_RENDERER_URL = 'http://renderer.test';
+    let finishLoad!: () => void;
+    const load = new Promise<void>((resolve) => {
+      finishLoad = resolve;
+    });
+    const harness = createHarness(undefined, load);
+    const visible: boolean[] = [];
+    const widget = createUsageWindow(visible, []);
+    const shows = [widget.setVisible(true), widget.setVisible(true)];
+    expect(harness.showInactive).not.toHaveBeenCalled();
+    finishLoad();
+    await Promise.all(shows);
+    expect(visible).toEqual([true]);
+    expect(harness.showInactive).toHaveBeenCalledOnce();
+  });
+
   it('reports explicit show and native close transitions', async () => {
     process.env.ELECTRON_RENDERER_URL = 'http://renderer.test';
     const harness = createHarness();

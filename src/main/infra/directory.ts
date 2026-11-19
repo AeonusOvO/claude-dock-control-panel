@@ -1,7 +1,10 @@
 import { statSync } from 'node:fs';
 import path from 'node:path';
 
-const MAX_PATH_INPUT_LENGTH = 32_768;
+export const normalizeProjectPath = (projectPath: string): string =>
+  path.resolve(projectPath).toLowerCase();
+
+export const MAX_PATH_INPUT_LENGTH = 32_768;
 
 export const resolveDirectory = (candidate: string): string => {
   if (typeof candidate !== 'string' || candidate.trim().length === 0) {

@@ -45,6 +45,30 @@ const reserve = (store: ConversationRecoveryStore): void => {
 };
 
 describe('conversation recovery store', () => {
+  it('restores long-path drafts and isolates a malformed sibling record', () => {
+    const root = createRoot();
+    const store = new ConversationRecoveryStore(root, encryption());
+    reserve(store);
+    const longPath = path.join(root, ...Array<string>(40).fill('long-project-component-12345678'));
+    const otherId = '22222222-2222-4222-8222-222222222222';
+    store.reserve({
+      ...identity,
+      projectPath: longPath,
+      conversationId: otherId,
+      ownerKind: 'native',
+      launch: { configFingerprint: recoveryConfigFingerprint({}) },
+    });
+    store.preparePrompt('claude', longPath, otherId, 'draft', '保留草稿');
+    const file = path.join(root, 'claude', 'recovery-journal.json');
+    const journal = JSON.parse(readFileSync(file, 'utf8')) as { records: unknown[] };
+    journal.records[0] = { ...identity, clean: 'invalid' };
+    journal.records.push({ bad: true });
+    writeFileSync(file, JSON.stringify(journal));
+    const restored = new ConversationRecoveryStore(root, encryption());
+    expect(restored.list()).toHaveLength(2);
+    expect(restored.readDraft('claude', longPath, otherId, 'draft')).toBe('保留草稿');
+  });
+
   it('encrypts prepared prompts and never exposes them in views or journal plaintext', () => {
     const root = createRoot();
     const store = new ConversationRecoveryStore(root, encryption(), () => 100);

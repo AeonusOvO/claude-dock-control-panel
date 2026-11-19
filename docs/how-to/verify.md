@@ -69,7 +69,7 @@ npm run dist
 | `npm run dist`                                                   | 端到端打包并生成当前通道产物                                                              |
 
 Electron 布局、控件、视觉、select、滚动和 ConPTY 命令会构建对应进程并真实启动 Electron；accelerated
-soak 直接运行 Node 合成时钟。最终候选的这些门禁必须在全部发行改动提交后的 exact commit 上运行。
+soak 每次完成文件写入与回收后推进一个模拟分钟，运行到目标模拟时长后输出 `createdEvents` 和 `virtualElapsedMs`。默认 24 小时需完成 1,440 次；服务每 25 次循环创建并关闭一次。最终候选的这些门禁必须在全部发行改动提交后的 exact commit 上运行。
 弹窗下拉命中测试使用可见窗口，让 CSS 入场动画实际推进，避免隐藏窗口停在起始变换而误判遮挡。
 
 `test:visual:real` 使用私有隔离目录中预置的无凭据 Claude 接入和 fake adapter；跳过引导不会替测试自动

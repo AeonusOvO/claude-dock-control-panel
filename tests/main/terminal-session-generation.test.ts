@@ -69,6 +69,34 @@ beforeEach(() => {
 });
 
 describe('TerminalSession PTY generation ownership', () => {
+  it('waits for a late exit on retry after a stop timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const session = new TerminalSession('session-exit', 'D:\\Project', 'term', vi.fn(), vi.fn());
+      const generation = session.start().ptyGeneration;
+      const first = session.stopIfGenerationAndWait(generation);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await first).toBeUndefined();
+      const retry = session.stopIfGenerationAndWait(generation);
+      const concurrent = session.stopIfGenerationAndWait(generation);
+      let resolved = false;
+      void retry.then(() => {
+        resolved = true;
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(resolved).toBe(false);
+      const proc = ptyHarness.processes[0]!;
+      expect(proc.kill).toHaveBeenCalledOnce();
+      proc.emitExit(0);
+      for (const result of await Promise.all([retry, concurrent])) {
+        expect(result).toMatchObject({ phase: 'stopped', ptyGeneration: generation });
+      }
+      expect(await session.stopIfGenerationAndWait(generation)).toMatchObject({ phase: 'stopped' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('publishes the adopted grid with every replacement generation before its output', () => {
     const statuses: TerminalStatus[] = [];
     const session = new TerminalSession('session-size', 'D:\\Project', '对话', vi.fn(), (status) =>

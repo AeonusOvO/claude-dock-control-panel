@@ -244,6 +244,7 @@ export class TerminalSession {
   private pidMarkerDone = true;
   private readonly exitWaiters = new Map<number, Set<PtyExitWaiter>>();
   private process?: IPty;
+  private awaitingExitGeneration?: number;
   private rows = DEFAULT_TERMINAL_SIZE.rows;
   private status: TerminalStatus;
 
@@ -309,6 +310,7 @@ export class TerminalSession {
     }
 
     const generation = ++this.generation;
+    this.awaitingExitGeneration = undefined;
     this.pidMarkerBuffer = '';
     this.pidMarkerDone = false;
     this.setStatus({
@@ -340,6 +342,7 @@ export class TerminalSession {
       );
 
       this.process = terminalProcess;
+      this.awaitingExitGeneration = generation;
       terminalProcess.onData((data) => {
         if (generation !== this.generation || this.process !== terminalProcess) {
           return;
@@ -351,6 +354,7 @@ export class TerminalSession {
       });
       terminalProcess.onExit(({ exitCode }) => {
         if (generation !== this.generation) return;
+        this.awaitingExitGeneration = undefined;
 
         if (this.process === terminalProcess) {
           this.process = undefined;
@@ -437,13 +441,11 @@ export class TerminalSession {
   ): Promise<TerminalStatus | undefined> {
     if (expectedGeneration !== this.generation) return undefined;
     const terminalProcess = this.process;
-    if (!terminalProcess) return this.getStatus();
+    if (this.awaitingExitGeneration !== expectedGeneration) return this.getStatus();
 
-    const exited = this.waitForExit(expectedGeneration, terminalProcess);
-    const status = this.stopIfGeneration(expectedGeneration, emitStatus);
-    if (!status) return undefined;
-    if (!(await exited)) return undefined;
-    return this.getStatus();
+    const exited = this.waitForExit(expectedGeneration);
+    if (terminalProcess) this.stop(emitStatus);
+    return (await exited) && expectedGeneration === this.generation ? this.getStatus() : undefined;
   }
 
   public write(expectedGeneration: PtyGeneration, data: string): boolean {
@@ -497,10 +499,7 @@ export class TerminalSession {
     return holdback > 0 ? stripped.slice(0, stripped.length - holdback) : stripped;
   }
 
-  private waitForExit(expectedGeneration: PtyGeneration, terminalProcess: IPty): Promise<boolean> {
-    if (expectedGeneration !== this.generation || this.process !== terminalProcess) {
-      return Promise.resolve(false);
-    }
+  private waitForExit(expectedGeneration: PtyGeneration): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => {
         const waiters = this.exitWaiters.get(expectedGeneration);

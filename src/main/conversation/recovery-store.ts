@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
+import { MAX_PATH_INPUT_LENGTH } from '../infra/directory';
 import type { ConversationOwnerKind, ConversationRuntime } from '../../shared/conversation/native';
 
 export type RecoverySubmissionState =
@@ -140,7 +141,7 @@ const parseRecord = (value: unknown): ConversationRecoveryRecord | undefined => 
     !UUID.test(value.conversationId) ||
     typeof value.projectPath !== 'string' ||
     !path.isAbsolute(value.projectPath) ||
-    value.projectPath.length > 1_000 ||
+    value.projectPath.length > MAX_PATH_INPUT_LENGTH ||
     !isRuntime(value.runtime) ||
     !isOwnerKind(value.ownerKind) ||
     typeof value.clean !== 'boolean' ||
@@ -176,13 +177,42 @@ const parseRecord = (value: unknown): ConversationRecoveryRecord | undefined => 
   };
 };
 
-const parseJournal = (raw: string): RecoveryJournal | undefined => {
+const parseJournal = (
+  raw: string,
+  backupForDamagedRecords?: () => RecoveryJournal | undefined,
+): RecoveryJournal | undefined => {
   try {
     const value: unknown = JSON.parse(raw);
     if (!isRecord(value) || value.version !== 1 || !Array.isArray(value.records)) return undefined;
-    const records = value.records.map(parseRecord);
-    if (records.some((record) => !record)) return undefined;
-    return { records: records as ConversationRecoveryRecord[], version: 1 };
+    const records: ConversationRecoveryRecord[] = [];
+    let backup: Map<string, ConversationRecoveryRecord> | undefined;
+    for (const row of value.records) {
+      const valid = parseRecord(row);
+      if (valid) {
+        records.push(valid);
+        continue;
+      }
+      if (!backupForDamagedRecords) return undefined;
+      if (
+        !isRecord(row) ||
+        !isRuntime(row.runtime) ||
+        typeof row.projectPath !== 'string' ||
+        !path.isAbsolute(row.projectPath) ||
+        typeof row.conversationId !== 'string' ||
+        !UUID.test(row.conversationId)
+      )
+        continue;
+      backup ??= new Map(
+        (backupForDamagedRecords()?.records ?? []).map((record) => [
+          keyOf(record.runtime, record.projectPath, record.conversationId),
+          record,
+        ]),
+      );
+      const identity = keyOf(row.runtime, row.projectPath, row.conversationId);
+      const previous = backup.get(identity);
+      if (previous) records.push(previous);
+    }
+    return records.length || !value.records.length ? { records, version: 1 } : undefined;
   } catch {
     return undefined;
   }
@@ -217,7 +247,11 @@ export class ConversationRecoveryStore {
     projectPath: string;
     runtime: ConversationRuntime;
   }): ConversationRecoveryView {
-    if (!UUID.test(input.conversationId) || !path.isAbsolute(input.projectPath)) {
+    if (
+      !UUID.test(input.conversationId) ||
+      !path.isAbsolute(input.projectPath) ||
+      path.resolve(input.projectPath).length > MAX_PATH_INPUT_LENGTH
+    ) {
       throw new Error('恢复日志的会话身份无效。');
     }
     if (!DIGEST.test(input.launch.configFingerprint)) {
@@ -410,18 +444,20 @@ export class ConversationRecoveryStore {
   }
 
   private load(): RecoveryJournal {
-    for (const candidate of [this.storagePath, this.backupPath]) {
+    const read = (
+      file: string,
+      recover?: () => RecoveryJournal | undefined,
+    ): RecoveryJournal | undefined => {
       try {
-        if (!existsSync(candidate)) continue;
-        const bytes = readFileSync(candidate);
-        if (bytes.length > MAX_JOURNAL_BYTES) continue;
-        const parsed = parseJournal(bytes.toString('utf8'));
-        if (parsed) return parsed;
+        const bytes = readFileSync(file);
+        if (bytes.length <= MAX_JOURNAL_BYTES) return parseJournal(bytes.toString('utf8'), recover);
       } catch {
-        // Try the last known-good backup before starting with an empty journal.
+        // Missing or unreadable journals fall through to the last good copy.
       }
-    }
-    return { records: [], version: 1 };
+      return undefined;
+    };
+    const backup = () => read(this.backupPath);
+    return read(this.storagePath, backup) ?? backup() ?? { records: [], version: 1 };
   }
 
   private persist(): void {

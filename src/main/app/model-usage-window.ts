@@ -34,8 +34,9 @@ export class ModelUsageWindow {
       if (visible) throw new Error('应用正在退出。');
       return;
     }
+    const request =
+      visible && this.requestedVisible ? this.visibilityRequest : ++this.visibilityRequest;
     this.requestedVisible = visible;
-    const request = ++this.visibilityRequest;
     this.onVisibilityRequest(visible);
     if (!visible) {
       this.window?.close();
@@ -50,10 +51,6 @@ export class ModelUsageWindow {
 
   private async ensureVisible(request: number): Promise<void> {
     if (!this.isCurrentVisibleRequest(request)) return;
-    if (this.window && !this.window.isDestroyed()) {
-      this.window.showInactive();
-      return;
-    }
     if (this.opening) {
       const opening = this.opening;
       const openingRequest = this.openingRequest;
@@ -71,6 +68,10 @@ export class ModelUsageWindow {
       if (!this.isCurrentVisibleRequest(request)) return;
       if (this.window && !this.window.isDestroyed()) return;
       return this.ensureVisible(request);
+    }
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.showInactive();
+      return;
     }
     const opening = this.open(request);
     const trackedOpening = opening.finally(() => {

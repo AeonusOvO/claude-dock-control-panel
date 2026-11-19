@@ -92,6 +92,30 @@ const createFakeFactory = () => {
   return { factory, terminals };
 };
 
+describe('visible project ownership', () => {
+  it('keeps accent-distinct directories apart while matching Windows path case', () => {
+    const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), createFakeFactory().factory);
+    const a = workspace.openProject('D:\\cafe');
+    const b = workspace.openProject('D:\\café');
+    expect(b.reused).toBe(false);
+    expect(workspace.openProject('d:\\CAFÉ').state.activeSessionId).toBe(b.state.activeSessionId);
+    expect(workspace.closeDirectory('D:\\café').sessions.map((s) => s.id)).toEqual([
+      a.state.activeSessionId,
+    ]);
+  });
+
+  it('skips hidden neighbors and clears the active ID after the last visible tab closes', () => {
+    const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), createFakeFactory().factory);
+    const first = workspace.openConversation('D:\\one').activeSessionId;
+    const hidden = workspace.openBackgroundSession('D:\\one').id;
+    const last = workspace.openConversation('D:\\two').activeSessionId;
+    expect(workspace.close(last).activeSessionId).toBe(first);
+    expect(workspace.close(first)).toMatchObject({ activeSessionId: '', sessions: [] });
+    expect(() => workspace.activate(hidden)).toThrow();
+    expect(workspace.close(hidden).activeSessionId).toBe('');
+  });
+});
+
 describe('conversation numbering', () => {
   it('does not reuse a number after an earlier launch rolls back or a tab closes', () => {
     const { factory } = createFakeFactory();

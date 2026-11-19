@@ -112,6 +112,45 @@ handler 之间禁止互相 import：共享只经 `context/guards/validation`，�
 `preflight-service-errors.ts` 收口租约失效错误。服务层保留原有导出兼容调用者，探测与不探测的业务入口
 均通过同一套 route lease 生命周期校验，不把关闭自动检测实现为跳过整个网络事务。
 
+## rc.46 未接入生产入口的模块复核
+
+从主进程、preload、主窗口、用量悬浮球及转录 worker 五个入口追踪 TypeScript 引用，并核对运行脚本、动态加载点、测试和 ADR-0009。下表列出全部 32 个候选，路径相对于 `src/main`。当前插件入口使用 `ClaudePluginManager`，网络预检使用 `network/`。表内实现各有独立行为或边界契约，仓库没有对应功能退役的决定，本次全部保留。每行给出一项直接或经调用链覆盖该实现的测试，位于 `tests/main/`。
+
+| 模块                                                     | 核实的职责                   | 测试证据                                |
+| -------------------------------------------------------- | ---------------------------- | --------------------------------------- |
+| `egress-diagnostics/address.ts`                          | 解析地址及校验地址族         | `egress-public-address.test.ts`         |
+| `egress-diagnostics/application-request.ts`              | 带传输边界的应用请求         | `egress-application-request.test.ts`    |
+| `egress-diagnostics/atomic-store.ts`                     | 诊断数据的原子写入           | `egress-process-policy-store.test.ts`   |
+| `egress-diagnostics/evidence-policy.ts`                  | 证据新鲜度与置信度判定       | `egress-evidence-policy.test.ts`        |
+| `egress-diagnostics/explanation.ts`                      | 从观测证据生成解释           | `egress-evidence-policy.test.ts`        |
+| `egress-diagnostics/history-store.ts`                    | 诊断历史留存与脱敏           | `egress-history-store.test.ts`          |
+| `egress-diagnostics/maxmind-file-policy.ts`              | 本地数据库身份及读取校验     | `egress-maxmind-anonymous-plus.test.ts` |
+| `egress-diagnostics/parsing.ts`                          | 外部响应的有界解析           | `egress-public-address.test.ts`         |
+| `egress-diagnostics/process-policy-store.ts`             | 进程策略持久化与修订号       | `egress-repair-transaction.test.ts`     |
+| `egress-diagnostics/process-policy-types.ts`             | 策略数据校验                 | `egress-process-policy-types.test.ts`   |
+| `egress-diagnostics/provider-registry.ts`                | 允许访问的诊断端点           | `egress-application-request.test.ts`    |
+| `egress-diagnostics/repair-applier.ts`                   | 修复及回滚事务               | `egress-repair-transaction.test.ts`     |
+| `egress-diagnostics/repair-journal.ts`                   | 中断修复事务的对账           | `egress-repair-journal.test.ts`         |
+| `egress-diagnostics/repair-planner.ts`                   | 生成修复计划                 | `egress-repair-planner.test.ts`         |
+| `egress-diagnostics/secret-store.ts`                     | 诊断凭据存储                 | `egress-secret-store.test.ts`           |
+| `egress-diagnostics/service.ts`                          | 组合各观测来源并投影结果     | `egress-diagnostics-service.test.ts`    |
+| `egress-diagnostics/stun-result-sanitizer.ts`            | STUN 结果脱敏                | `egress-diagnostics-service.test.ts`    |
+| `claude/plugins/catalog-normalizer.ts`                   | 不同来源的目录归一化         | `plugin-recommendation.test.ts`         |
+| `claude/plugins/catalog-service.ts`                      | 安装记录与推荐来源的聚合     | `plugin-catalog.test.ts`                |
+| `claude/plugins/claude-cli-record-adapter.ts`            | CLI 记录转换与来源归属       | `plugin-recommendation.test.ts`         |
+| `claude/plugins/community-source.ts`                     | 社区来源描述                 | `plugin-recommendation.test.ts`         |
+| `claude/plugins/demo-source.ts`                          | 离线示例的来源及执行预览契约 | `plugin-recommendation.test.ts`         |
+| `claude/plugins/official-source.ts`                      | 官方来源识别                 | `plugin-recommendation.test.ts`         |
+| `claude/plugins/presentation-cache.ts`                   | 防止迟到响应覆盖新的目录快照 | `plugin-catalog.test.ts`                |
+| `claude/plugins/recommendation-policy.ts`                | 推荐排序和来源判定           | `plugin-recommendation.test.ts`         |
+| `egress-diagnostics/adapters/abuseipdb.ts`               | AbuseIPDB 证据解析           | `egress-abuseipdb.test.ts`              |
+| `egress-diagnostics/adapters/ipinfo-max.ts`              | IPinfo 证据解析              | `egress-ipinfo-max.test.ts`             |
+| `egress-diagnostics/adapters/maxmind-anonymous-plus.ts`  | MaxMind 本地证据解析         | `egress-maxmind-anonymous-plus.test.ts` |
+| `egress-diagnostics/collectors/dns-correlation-types.ts` | DNS 观测与会话查询契约       | `egress-diagnostics-service.test.ts`    |
+| `egress-diagnostics/collectors/dns-correlation.ts`       | DNS 对照观测                 | `egress-dns-correlation.test.ts`        |
+| `egress-diagnostics/collectors/public-address.ts`        | 公网地址观测与持久化投影     | `egress-public-address.test.ts`         |
+| `egress-diagnostics/webrtc/stun-collector.ts`            | 隔离的 STUN 观测生命周期     | `egress-stun-collector.test.ts`         |
+
 ## `src/preload/`
 
 ```

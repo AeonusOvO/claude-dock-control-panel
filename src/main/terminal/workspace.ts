@@ -1,4 +1,4 @@
-import path from 'node:path';
+import { normalizeProjectPath } from '../infra/directory';
 import type {
   DevelopmentRuntime,
   PtyGeneration,
@@ -61,7 +61,7 @@ const defaultFactory: TerminalFactory = (id, initialCwd, initialTitle, onData, o
   new TerminalSession(id, initialCwd, initialTitle, onData, onStatus);
 
 export const sameDirectory = (left: string, right: string): boolean =>
-  path.resolve(left).localeCompare(path.resolve(right), undefined, { sensitivity: 'base' }) === 0;
+  normalizeProjectPath(left) === normalizeProjectPath(right);
 
 /**
  * A workspace holds only real project conversations. It is legitimately empty — at first launch,
@@ -98,6 +98,7 @@ export class TerminalWorkspace {
 
   public activate(sessionId: string): TerminalWorkspaceState {
     this.requireSession(sessionId);
+    if (this.backgroundSessions.has(sessionId)) throw new Error('后台接入会话不能激活。');
     this.setActiveSession(sessionId);
     this.emitState();
     return this.getState();
@@ -105,12 +106,13 @@ export class TerminalWorkspace {
 
   public close(sessionId: string): TerminalWorkspaceState {
     const session = this.requireSession(sessionId);
-    const background = this.backgroundSessions.delete(sessionId);
-    const sessionIds = [...this.sessions.keys()];
+    const background = this.backgroundSessions.has(sessionId);
+    const sessionIds = [...this.sessions.keys()].filter((id) => !this.backgroundSessions.has(id));
     const closedIndex = sessionIds.indexOf(sessionId);
 
     session.stop(false);
     this.sessions.delete(sessionId);
+    this.backgroundSessions.delete(sessionId);
     this.claudeSessionTitles.delete(sessionId);
     this.developmentRuntimes.delete(sessionId);
 
@@ -118,14 +120,8 @@ export class TerminalWorkspace {
       return this.getState();
     }
 
-    if (this.sessions.size === 0) {
-      this.setActiveSession('');
-    } else if (this.activeSessionId === sessionId) {
-      const nextId = sessionIds[closedIndex + 1] ?? sessionIds[closedIndex - 1];
-      if (!nextId || !this.sessions.has(nextId)) {
-        throw new Error('无法选择下一个项目会话。');
-      }
-      this.setActiveSession(nextId);
+    if (this.activeSessionId === sessionId) {
+      this.setActiveSession(sessionIds[closedIndex + 1] ?? sessionIds[closedIndex - 1] ?? '');
     }
 
     this.emitState();
@@ -340,7 +336,7 @@ export class TerminalWorkspace {
   }
 
   private nextConversationTitle(cwd: string): string {
-    const key = path.resolve(cwd).toLocaleLowerCase('en-US');
+    const key = normalizeProjectPath(cwd);
     const usedTitles = new Set(
       this.sessionIdsForDirectory(cwd).map((sessionId) => this.getStatus(sessionId).title),
     );

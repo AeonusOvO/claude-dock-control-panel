@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { normalizeProjectPath } from '../infra/directory';
 import type { WorkspaceProject } from '../../shared/contracts';
 import { isTerminalThemeId, type TerminalThemeId } from '../../shared/ui/terminal-themes';
 
@@ -15,9 +16,6 @@ const EMPTY_WORKSPACE: StoredWorkspace = {
   projects: [],
   version: 1,
 };
-
-const normalizeProjectPath = (projectPath: string): string =>
-  path.resolve(projectPath).toLowerCase();
 
 export class WorkspaceStore {
   private readonly storageDirectory: string;

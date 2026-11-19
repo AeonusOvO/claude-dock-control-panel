@@ -10,7 +10,7 @@ if (!Number.isFinite(durationHours) || durationHours <= 0 || durationHours > 48)
   throw new Error('--hours 必须在 0–48 之间。');
 }
 
-const realDurationMs = accelerated ? 8_000 : durationHours * 60 * 60 * 1_000;
+const targetDurationMs = durationHours * 60 * 60 * 1_000;
 const virtualTickMs = accelerated ? 60_000 : 1_000;
 const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'claudedock-runtime-soak-'));
 const eventsDirectory = path.join(fixtureRoot, 'events');
@@ -40,7 +40,7 @@ const close = (server) =>
 const run = async () => {
   const startedAt = Date.now();
   let virtualElapsedMs = 0;
-  while (Date.now() - startedAt < realDurationMs) {
+  while ((accelerated ? virtualElapsedMs : Date.now() - startedAt) < targetDurationMs) {
     const eventId = `${Date.now()}-${createdEvents}`;
     const temporary = path.join(eventsDirectory, `${eventId}.tmp`);
     const final = path.join(eventsDirectory, `${eventId}.json`);
@@ -67,11 +67,10 @@ const run = async () => {
     }
     if (!accelerated) await new Promise((resolve) => setTimeout(resolve, 1_000));
     else if (createdEvents % 250 === 0) await new Promise((resolve) => setImmediate(resolve));
-    if (accelerated && virtualElapsedMs >= durationHours * 60 * 60 * 1_000) break;
   }
   if (servers.size !== 0) throw new Error(`仍有 ${servers.size} 个本地 Web 服务未关闭。`);
   process.stdout.write(
-    `${JSON.stringify({ accelerated, createdEvents, durationHours, recycledServers })}\n`,
+    `${JSON.stringify({ accelerated, createdEvents, durationHours, recycledServers, virtualElapsedMs })}\n`,
   );
 };
 
